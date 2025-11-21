@@ -2,28 +2,37 @@ name: Täglicher Anwalt-Monitor
 
 on:
   schedule:
-    - cron: '0 4 * * *'      # jeden Tag 4 Uhr UTC
+    - cron: '0 4 * * *'
   workflow_dispatch:
 
 jobs:
   run:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write          # ← Wichtig: Schreibrechte für Push
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT }}   # ← Wir nutzen dein PAT
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install
+
+      - name: Install dependencies
         run: pip install -r monitor/requirements.txt
+
       - name: Run Monitor
         env:
           TARGETS_ENCRYPTED: ${{ secrets.TARGETS_ENCRYPTED }}
-          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
         run: python monitor/main.py
-      - name: Commit & Push
+
+      - name: Commit & Push (falls geändert)
         run: |
           git config user.name "Monitor Bot"
           git config user.email "bot@anwalt-monitor"
-          git add public/index.html data/findings.json data/archive_log.json || true
-          git commit -m "Update $(date +%F)" || echo "keine Änderung"
-          git push
+          git add data/findings.json docs/index.html || true
+          git diff --quiet && git diff --staged --quiet || (
+            git commit -m "Auto-Update $(date +'%Y-%m-%d %H:%M')"
+            git push
+          )
