@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Anwalt-Monitor | Öffentliche Quellen</title>
+  <style>
+    body{font-family:Arial,sans-serif;max-width:960px;margin:40px auto;padding:20px;background:#fafafa;color:#333;line-height:1.6}
+    header{text-align:center;padding:30px;background:#2c3e50;color:white;border-radius:8px}
+    h1{margin:0;font-size:2.2em}
+    .search{margin:30px 0;text-align:center}
+    input[type=text]{width:80%;max-width:500px;padding:14px;font-size:1.1em;border:1px solid #ccc;border-radius:6px}
+    .disclaimer{background:#fff3cd;padding:18px;border-radius:8px;margin:25px 0;font-size:0.95em}
+    .entry{background:white;padding:20px;margin:20px 0;border-left:6px solid #e74c3c;box-shadow:0 3px 10px rgba(0,0,0,0.1);border-radius:8px}
+    .name{font-size:1.4em;font-weight:bold;color:#2c3e50}
+    .meta{font-size:0.9em;color:#666;margin:10px 0}
+    blockquote{background:#ffebee;padding:15px;border-radius:6px;margin:15px 0;font-style:italic}
+    footer{text-align:center;margin-top:60px;color:#777;font-size:0.9em}
+  </style>
+</head>
+<body>
+<header>
+  <h1>Anwalt-Monitor</h1>
+  <p>Dokumentation öffentlich zugänglicher Quellen im Familienrecht</p>
+</header>
+
+<div class="search">
+  <input type="text" id="search" placeholder="Nach Anwalt, Ort oder Stichwort suchen…" onkeyup="filter()">
+</div>
+
+<div class="disclaimer">
+  <strong>Wichtiger Hinweis:</strong> Diese Seite zeigt ausschließlich öffentlich zugängliche Textstellen aus Webseiten und Urteilen. Es erfolgt <u>keine rechtliche Bewertung</u>.
+</div>
+
+<div id="results">
+  <p style="text-align:center;color:#777;">
+    Lade aktuelle Daten…<br><small>Die Seite wird täglich automatisch aktualisiert.</small>
+  </p>
+</div>
+
+<footer>
+  Ein Projekt für Transparenz im Familienrecht • Stand: <span id="date"></span>
+</footer>
+
+<script>
+fetch('../data/findings.json?t=' + Date.now())
+  .then(r => r.ok ? r.json() : [])
+  .then(data => {
+    const container = document.getElementById('results');
+    container.innerHTML = '';
+    if (!data || data.length === 0) {
+      container.innerHTML = '<p style="text-align:center;color:#777;">Noch keine dokumentierten Funde.</p>';
+      return;
+    }
+    data.slice().reverse().forEach(item => {
+      const div = document.createElement('div');
+      div.className = 'entry';
+      div.innerHTML = `
+        <div class="name">${item.anwalt || 'Unbekannt'}</div>
+        <div class="meta">
+          ${item.kanzlei ? item.kanzlei + ' • ' : ''}
+          ${item.ort ? item.ort + ' • ' : ''}
+          <a href="${item.quelle}" target="_blank">${item.quelle.replace(/^https?:\/\//,'').split('/')[0]}</a> • ${item.datum}
+        </div>
+        <blockquote>…${item.context}…</blockquote>
+      `;
+      container.appendChild(div);
+    });
+  });
+
+function filter() {
+  const term = document.getElementById('search').value.toLowerCase();
+  document.querySelectorAll('.entry').forEach(e => {
+    e.style.display = e.textContent.toLowerCase().includes(term) ? 'block' : 'none';
+  });
+}
+
+document.getElementById('date').textContent = new Date().toLocaleDateString('de-DE');
+</script>
+</body>
+</html>
