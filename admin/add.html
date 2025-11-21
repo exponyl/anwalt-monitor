@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head><title>Neuen Anwalt hinzufügen</title></head>
+<body>
+<h2>Neuen Anwalt zur Überwachung hinzufügen</h2>
+<form onsubmit="event.preventDefault(); add()">
+  Passwort: <input type="password" id="pw"><br><br>
+  Name: <input id="name" placeholder="Dr. Max Mustermann"><br><br>
+  Kanzlei-URL: <input id="url" placeholder="https://..."><br><br>
+  <button>Hinzufügen</button>
+</form>
+<script>
+async function add() {
+  const pw = document.getElementById('pw').value;
+  if (pw !== prompt("Bestätige Passwort")) return alert("Falsch!");
+  const data = {name: document.getElementById('name').value, kanzlei_url: document.getElementById('url').value, aktiv: true};
+  await fetch('https://httpbin.org/post', {method:'POST', body:JSON.stringify(data)}); // nur Demo
+  alert("Eingetragen! Secret wird beim nächsten Mal aktualisiert.");
+}
+</script>
+</body>
+</html>
