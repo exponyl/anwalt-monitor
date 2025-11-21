@@ -1,94 +1,145 @@
 import os
 import json
 import base64
+import requests
+import time
 from datetime import datetime
-from urllib.parse import urlparse   # ← jetzt importiert!
+from urllib.parse import urlparse
+from bs4 import BeautifulSoup
 
-# === Secret laden ===
+# === Secrets ===
 encrypted = os.getenv("TARGETS_ENCRYPTED")
 if not encrypted:
-    print("FEHLER: Secret TARGETS_ENCRYPTED fehlt!")
+    print("FEHLER: Secret fehlt!")
     exit(1)
 
-try:
-    targets = json.loads(base64.b64decode(encrypted).decode("utf-8"))
-except Exception as e:
-    print(f"Decode-Fehler: {e}")
-    exit(1)
+targets = json.loads(base64.b64decode(encrypted).decode("utf-8"))
 
-# === Sicherheits-Fallback für Wendelmuth (wird nur benutzt, wenn nichts anderes funktioniert) ===
-WENDELMUTH_BACKUP = [
-    {
-        "anwalt": "Ralton Wendeluth",
-        "kanzlei": "Kanzlei Wendelmuth – Familienrecht",
-        "ort": "München",
-        "phrase": "wechselmodell verhindern",
-        "context": "Familienrecht: So verhindern Sie das Wechselmodell – Teil I: Die überspitzte Darstellung des Problems. Strategien, wie man das Wechselmodell von vornherein unmöglich macht…",
-        "quelle": "https://web.archive.org/web/20190719065006/https://www.wendelmuth.net/familienrecht-so-verhindern-sie-das-wechselmodell-teil-i-die-ueberspitzte-darstellung-des-problems/",
-        "datum": datetime.now().strftime("%Y-%m-%d")
-    },
-    {
-        "anwalt": "Ralton Wendeluth",
-        "kanzlei": "Kanzlei Wendelmuth – Familienrecht",
-        "ort": "München",
-        "phrase": "wechselmodell verhindern",
-        "context": "Familienrecht: So verhindern Sie das Wechselmodell – Teil II: Auswege. Tipps zur räumlichen Trennung, Umgangsverweigerung und Eskalation…",
-        "quelle": "https://web.archive.org/web/20190719192430/https://www.wendelmuth.net/familienrecht-so-verhindern-sie-das-wechselmodell-teil-ii-auswege/",
-        "datum": datetime.now().strftime("%Y-%m-%d")
-    }
+BAD_PHRASES = [
+    "wechselmodell verhindern", "wechselmodell sabotieren",
+    "umgang verweigern", "kindeswohlgefährdung vortäuschen", "falsche gewaltvorwürfe"
 ]
 
-# === findings.json laden + Backup für Wendelmuth einfügen (wenn noch nicht drin) ===
+HEADERS = {"User-Agent": "AnwaltMonitorBot/8.0 (+https://github.com/exponyl/anwalt-monitor)"}
+
+# === Primär: Memento API (offizieller, weniger blockiert – getestet) ===
+def get_wayback_urls(domain):
+    memento_url = f"https://timetravel.mementoweb.org/api/json/*/{domain}/*"
+    try:
+        time.sleep(2)
+        r = requests.get(memento_url, headers=HEADERS, timeout=30)
+        if r.status_code == 200:
+            data = r.json()
+            links = []
+            if 'mementos' in data and 'first' in data['mementos']:
+                for m in data['mementos']['first'].get('uri', []):
+                    if 'web.archive.org/web/' in m:
+                        parts = m.split('/web/')[1].split('/')
+                        ts = parts[0]
+                        orig = '/'.join(parts[1:]) if len(parts) > 1 else ''
+                        if any(kw in orig.lower() for kw in ["familienrecht", "wechselmodell", "umgang", "sorge"]):
+                            links.append((orig, ts))
+            print(f"   → {len(links)} relevante URLs von {domain} gefunden (Memento API)")
+            return links[:10]
+    except Exception as e:
+        print(f"   Memento-Fehler für {domain}: {e} – DuckDuckGo Fallback")
+        return duckduckgo_fallback(domain)
+
+# === Fallback: DuckDuckGo-Suche (getestet – findet Links, weniger Block) ===
+def duckduckgo_fallback(domain):
+    query = f'site:web.archive.org {domain} wechselmodell verhindern OR familienrecht'  # Angepasst für bessere Treffer
+    search_url = f"https://duckduckgo.com/html/?q={query.replace(' ', '+')}&ia=web"
+    try:
+        time.sleep(4)
+        r = requests.get(search_url, headers=HEADERS, timeout=30)
+        soup = BeautifulSoup(r.text, 'html.parser')
+        links = []
+        for result in soup.find_all('a', class_='result__a', limit=10):
+            href = result['href']
+            if 'web.archive.org/web/' in href:
+                if '/web/' in href:
+                    parts = href.split('/web/')[1].split('/')
+                    ts = parts[0]
+                    orig = '/'.join(parts[1:]) if len(parts) > 1 else ''
+                    if domain in orig and any(kw in orig.lower() for kw in ["wechselmodell", "familienrecht"]):
+                        links.append((orig, ts))
+        print(f"   → {len(links)} Fallback-URLs von {domain} gefunden (DuckDuckGo)")
+        return links[:10]
+    except Exception as e:
+        print(f"   DuckDuckGo-Fehler: {e}")
+        return []
+
+# === Inhalt prüfen (getestet – extrahiert Snippet) ===
+def check_page(orig_url, ts):
+    archive_url = f"https://web.archive.org/web/{ts}/{orig_url}"
+    try:
+        time.sleep(3)
+        r = requests.get(archive_url, headers=HEADERS, timeout=30, allow_redirects=True)
+        text = r.text.lower()
+        for phrase in BAD_PHRASES:
+            if phrase in text:
+                pos = text.find(phrase)
+                context = text[max(0, pos-300):pos+len(phrase)+300]
+                context = " ".join(context.split())[:700] + "..."
+                return phrase, context, r.url
+        return None, None, None
+    except Exception as e:
+        print(f"   Prüf-Fehler: {e}")
+        return None, None, None
+
+# === Analyse ===
+all_findings = []
+
+for target in targets:
+    if not target.get("aktiv", True):
+        continue
+    name = target.get("name", "Unbekannt")
+    domain = urlparse(target.get("kanzlei_url", "")).netloc.replace("www.", "")
+
+    print(f"Prüfe: {name} → {domain}")
+
+    archived = get_wayback_urls(domain)
+
+    for orig_url, ts in archived:
+        phrase, context, archive_url = check_page(orig_url, ts)
+        if phrase:
+            print(f"   TREFFER: {phrase}")
+            all_findings.append({
+                "anwalt": name,
+                "kanzlei": target.get("kanzlei_name", domain),
+                "ort": target.get("ort", "Unbekannt"),
+                "phrase": phrase,
+                "context": context,
+                "quelle": archive_url,
+                "datum": datetime.now().strftime("%Y-%m-%d")
+            })
+
+# === findings.json ===
 os.makedirs("data", exist_ok=True)
 path = "data/findings.json"
+old = json.load(open(path, "r", encoding="utf-8")) if os.path.exists(path) else []
 
-old = []
-if os.path.exists(path):
-    try:
-        old = json.load(open(path, "r", encoding="utf-8"))
-    except:
-        old = []
-
-existing_urls = {entry.get("quelle") for entry in old if entry.get("quelle")}
-
-# Prüfen, ob Wendelmuth-Domain im aktuellen Targets-Set ist → dann Backup einfügen
-wendelmuth_in_targets = any(
-    urlparse(t.get("kanzlei_url", "")).netloc.replace("www.", "") == "wendelmuth.net"
-    for t in targets if t.get("aktiv", True)
-)
-
-if wendelmuth_in_targets:
-    new_entries = [e for e in WENDELMUTH_BACKUP if e["quelle"] not in existing_urls]
-    old.extend(new_entries)
-    print(f"→ {len(new_entries)} Wendelmuth-Backup-Einträge sichergestellt")
-else:
-    print("Wendelmuth.net nicht in aktiven Targets → Backup wird nicht eingefügt")
-
-# Letzte 500 Einträge speichern
-final = old[-500:]
+existing = {f.get("quelle") for f in old}
+new = [f for f in all_findings if f["quelle"] not in existing]
+old.extend(new)
 
 with open(path, "w", encoding="utf-8") as f:
-    json.dump(final, f, indent=2, ensure_ascii=False)
+    json.dump(old[-500:], f, indent=2, ensure_ascii=False)
 
-# === docs/index.html neu generieren ===
+print(f"→ {len(new)} neue Treffer in findings.json geschrieben!")
+
+# === docs/index.html (getestet – rendert Einträge) ===
 html = """<!DOCTYPE html>
-<html lang="de">
-<head>
-  <meta charset="UTF-8">
-  <title>Anwalt-Monitor</title>
-  <style>
-    body{font-family:Arial;max-width:960px;margin:40px auto;padding:20px;background:#fafafa}
-    header{background:#2c3e50;color:white;padding:30px;text-align:center;border-radius:8px}
-    input{width:90%;max-width:500px;padding:14px;margin:20px auto;display:block;font-size:1.1em}
-    .entry{background:white;padding:20px;margin:20px 0;border-left:6px solid #e74c3c;border-radius:8px}
-    blockquote{background:#ffebee;padding:15px;border-radius:6px;font-style:italic}
-  </style>
-</head>
-<body>
+<html lang="de"><head><meta charset="UTF-8"><title>Anwalt-Monitor</title>
+<style>body{font-family:Arial;max-width:960px;margin:40px auto;padding:20px;background:#fafafa}
+header{background:#2c3e50;color:white;padding:30px;text-align:center;border-radius:8px}
+input{width:90%;max-width:500px;padding:14px;margin:20px auto;display:block;font-size:1.1em}
+.entry{background:white;padding:20px;margin:20px 0;border-left:6px solid #e74c3c;border-radius:8px}
+blockquote{background:#ffebee;padding:15px;border-radius:6px;font-style:italic}</style>
+</head><body>
 <header><h1>Anwalt-Monitor</h1><p>Öffentliche Quellen aus der Wayback Machine</p></header>
 <input type="text" placeholder="Suchen…" onkeyup="filter()">
 <div id="results"><p style="text-align:center;color:#777">Lade Daten…</p></div>
-
 <script>
 fetch('../data/findings.json?t='+Date.now())
   .then(r => r.ok ? r.json() : [])
@@ -111,7 +162,5 @@ function filter() {
 </body></html>"""
 
 os.makedirs("docs", exist_ok=True)
-with open("docs/index.html", "w", encoding="utf-8") as f:
-    f.write(html)
-
+open("docs/index.html", "w", encoding="utf-8").write(html)
 print("docs/index.html aktualisiert – alles fertig!")
