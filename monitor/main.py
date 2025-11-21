@@ -2,7 +2,6 @@ import os
 import json
 import base64
 import requests
-import time
 from datetime import datetime
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
@@ -20,54 +19,48 @@ BAD_PHRASES = [
     "umgang verweigern", "kindeswohlgefährdung vortäuschen", "falsche gewaltvorwürfe"
 ]
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36"
-}
+HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36"}
 
-# === Nur DuckDuckGo als Fallback – funktioniert in GitHub Actions zuverlässig ===
+# === Dynamische Suche via DuckDuckGo (getestet – funktioniert in Actions, findet Wayback-Links) ===
 def get_wayback_urls(domain):
-    query = f'site:web.archive.org {domain} "wechselmodell verhindern" OR familienrecht OR umgangsverweigerung'
-    url = f"https://duckduckgo.com/html/?q={query.replace(' ', '+')}"
-    
+    query = f'site:web.archive.org {domain} (wechselmodell verhindern OR familienrecht OR umgang OR sorge)'
+    url = f"https://duckduckgo.com/html/?q={query.replace(' ', '+')}&ia=web"
     try:
-        time.sleep(3)
-        r = requests.get(url, headers=HEADERS, timeout=25)
-        soup = BeautifulSoup(r.text, "html.parser")
+        r = requests.get(url, headers=HEADERS, timeout=20)
+        soup = BeautifulSoup(r.text, 'html.parser')
         links = []
         for a in soup.select("a.result__a"):
             href = a.get("href", "")
-            if "web.archive.org/web/" not in href:
-                continue
-            try:
-                part = href.split("/web/")[1]
-                ts = part.split("/")[0]
-                orig = "/".join(part.split("/")[1:]).split("?", 1)[0]
-                if domain in orig.lower() and any(kw in orig.lower() for kw in ["familienrecht", "wechselmodell", "umgang", "sorge"]):
-                    links.append((orig, ts))
-            except:
-                continue
+            if "web.archive.org/web/" in href:
+                try:
+                    part = href.split("/web/")[1]
+                    ts = part.split("/")[0]
+                    orig = "/".join(part.split("/")[1:]).split("?")[0]
+                    if domain in orig.lower():
+                        links.append((orig, ts))
+                except:
+                    continue
         print(f"   → {len(links)} URLs von {domain} gefunden (DuckDuckGo)")
-        return links[:8]
+        return links[:5]
     except Exception as e:
         print(f"   DuckDuckGo-Fehler: {e}")
         return []
 
-# === Inhalt prüfen ===
-def check_page(orig_url, ts):
+# === Snippet extrahieren (ohne Blocking – getestet) ===
+def extract_snippet(orig_url, ts):
     archive_url = f"https://web.archive.org/web/{ts}/{orig_url}"
     try:
-        time.sleep(2.5)
-        r = requests.get(archive_url, headers=HEADERS, timeout=25)
+        r = requests.get(archive_url, headers=HEADERS, timeout=15, allow_redirects=True)
         text = r.text.lower()
         for phrase in BAD_PHRASES:
             if phrase in text:
                 pos = text.find(phrase)
-                context = text[max(0, pos-300):pos+len(phrase)+300]
-                context = " ".join(context.split())[:700] + "..."
-                return phrase, context, archive_url
-        return None, None, None
+                context = text[max(0, pos-250):pos+len(phrase)+250]
+                context = " ".join(context.split())[:600] + "..."
+                return phrase, context
+        return None, None
     except:
-        return None, None, None
+        return None, None
 
 # === Analyse ===
 all_findings = []
@@ -79,10 +72,11 @@ for target in targets:
     domain = urlparse(target.get("kanzlei_url", "")).netloc.replace("www.", "")
 
     print(f"Prüfe: {name} → {domain}")
+
     urls = get_wayback_urls(domain)
 
     for orig_url, ts in urls:
-        phrase, context, archive_url = check_page(orig_url, ts)
+        phrase, context = extract_snippet(orig_url, ts)
         if phrase:
             print(f"   TREFFER: {phrase}")
             all_findings.append({
@@ -91,11 +85,11 @@ for target in targets:
                 "ort": target.get("ort", "Unbekannt"),
                 "phrase": phrase,
                 "context": context,
-                "quelle": archive_url,
+                "quelle": f"https://web.archive.org/web/{ts}/{orig_url}",
                 "datum": datetime.now().strftime("%Y-%m-%d")
             })
 
-# === findings.json schreiben ===
+# === findings.json ===
 os.makedirs("data", exist_ok=True)
 path = "data/findings.json"
 
@@ -107,9 +101,12 @@ old.extend(new)
 with open(path, "w", encoding="utf-8") as f:
     json.dump(old[-500:], f, indent=2, ensure_ascii=False)
 
-print(f"→ {len(new)} neue Treffer in findings.json geschrieben!")
+if not new:
+    print("   → Keine neuen Treffer – prüfe Phrasen oder Query")
+else:
+    print(f"→ {len(new)} neue Treffer in findings.json geschrieben!")
 
-# === docs/index.html – korrekter Pfad für GitHub Pages ===
+# === docs/index.html (fixierter Pfad für GitHub Pages /docs) ===
 html = '''<!DOCTYPE html>
 <html lang="de">
 <head>
@@ -129,11 +126,11 @@ html = '''<!DOCTYPE html>
 <div id="results"><p style="text-align:center;color:#777">Lade Daten…</p></div>
 
 <script>
-fetch('data/findings.json?t='+Date.now())
+fetch('../data/findings.json?t='+Date.now())
   .then(r => r.ok ? r.json() : [])
   .then(d => {
     const c = document.getElementById('results'); c.innerHTML = '';
-    if (!d.length) { c.innerHTML = '<p>Noch keine Treffer.</p>'; return; }
+    if (!d.length) { c.innerHTML = '<p style="text-align:center;color:#777">Noch keine Treffer.</p>'; return; }
     d.slice().reverse().forEach(i => {
       c.innerHTML += `<div class="entry">
         <strong>${i.anwalt}</strong> • ${i.kanzlei} • ${i.ort}<br>
@@ -141,8 +138,12 @@ fetch('data/findings.json?t='+Date.now())
         <blockquote>…${i.context}</blockquote>
       </div>`;
     });
+    console.log('Findings geladen:', d.length, 'Einträge');
   })
-  .catch(() => document.getElementById('results').innerHTML = '<p>Fehler beim Laden.</p>');
+  .catch(e => {
+    document.getElementById('results').innerHTML = '<p style="color:red">Fehler beim Laden der Daten.</p>';
+    console.error('Fetch Error:', e);
+  });
 
 function filter() {
   let term = document.querySelector('input').value.toLowerCase();
