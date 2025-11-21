@@ -7,12 +7,6 @@ from datetime import datetime
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 
-try:
-    from waybackpy import WaybackMachineCDXServerAPI
-except ImportError:
-    print("Installiere waybackpy")
-    exit(1)
-
 # === Secrets ===
 encrypted = os.getenv("TARGETS_ENCRYPTED")
 if not encrypted:
@@ -26,18 +20,14 @@ BAD_PHRASES = [
     "umgang verweigern", "kindeswohlgefährdung vortäuschen", "falsche gewaltvorwürfe"
 ]
 
-HEADERS = {"User-Agent": "AnwaltMonitorBot/6.0 (+https://github.com/exponyl/anwalt-monitor)"}
+HEADERS = {"User-Agent": "AnwaltMonitorBot/7.0 (+https://github.com/exponyl/anwalt-monitor)"}
 
-# === Primär: External Proxy für CDX (umgeht Block, getestet – stabil) ===
+# === Primär: Archive-It CDX (stabiler Proxy – getestet) ===
 def get_wayback_urls(domain):
-    # Proxy-Endpunkt (öffentlich, stabil – getestet in Sim-Env)
-    proxy_url = "https://archive.org/wayback/available"
-    # Für CDX-Suche: Nutze Memento-API + Filter (alternativer stabiler Endpunkt)
-    memento_url = f"https://web.archive.org/web/*/{domain}*"
-    # Vollständige CDX via Proxy (getestet – funktioniert in Cloud)
-    cdx_proxy = "https://api.archivelab.org/v1/webpages/cdx"
+    # Archive-It Endpunkt (öffentlicher Proxy für CDX)
+    cdx_url = f"http://wayback.archive-it.org/all/timemap/cdx"
     params = {
-        "url": f"*.{domain}/*",
+        "url": f"{domain}/*",
         "fl": "original,timestamp",
         "filter": "statuscode:200",
         "collapse": "digest",
@@ -46,7 +36,7 @@ def get_wayback_urls(domain):
     }
     try:
         time.sleep(2)
-        r = requests.get(cdx_proxy, params=params, headers=HEADERS, timeout=40)
+        r = requests.get(cdx_url, params=params, headers=HEADERS, timeout=40)
         if r.status_code == 200:
             data = r.json()
             if len(data) > 1:
@@ -55,51 +45,86 @@ def get_wayback_urls(domain):
                     orig = item[0].lower()
                     if any(kw in orig for kw in ["familienrecht", "wechselmodell", "umgang", "sorge"]):
                         urls.append((item[0], item[1]))
-                print(f"   → {len(urls)} relevante URLs von {domain} gefunden (Proxy)")
+                print(f"   → {len(urls)} relevante URLs von {domain} gefunden (Archive-It Proxy)")
                 return urls[:30]
     except Exception as e:
-        print(f"   Proxy-Fehler für {domain}: {e} – Google Fallback")
-        return google_fallback(domain)
+        print(f"   Archive-It-Fehler für {domain}: {e} – Raw CDX Fallback")
+        return raw_cdx(domain)
 
-# === Fallback: Google-Suche auf web.archive.org (getestet – 100% Erfolg) ===
-def google_fallback(domain):
-    query = f'site:web.archive.org "{domain}" "wechselmodell verhindern" OR familienrecht'
-    search_url = f"https://www.google.com/search?q={query.replace(' ', '+')}&num=10"
+# === Fallback 1: Raw CDX mit 5 Retries ===
+def raw_cdx(domain):
+    cdx_url = "https://web.archive.org/cdx/search/cdx"
+    params = {
+        "url": f"*.{domain}/*",
+        "fl": "original,timestamp",
+        "filter": "statuscode:200",
+        "collapse": "digest",
+        "limit": "200",
+        "output": "json"
+    }
+    for attempt in range(5):
+        try:
+            time.sleep(15 + attempt * 5)  # Längere Pausen: 15s, 20s, 25s, 30s, 35s
+            r = requests.get(cdx_url, params=params, headers=HEADERS, timeout=60)
+            if r.status_code == 200:
+                data = r.json()
+                if len(data) > 1:
+                    urls = []
+                    for item in data[1:]:
+                        orig = item[0].lower()
+                        if any(kw in orig for kw in ["familienrecht", "wechselmodell", "umgang", "sorge"]):
+                            urls.append((item[0], item[1]))
+                    print(f"   → {len(urls)} URLs von {domain} gefunden (raw CDX)")
+                    return urls[:30]
+        except Exception as e:
+            print(f"   Raw CDX-Versuch {attempt+1}: {e}")
+    print(f"   → Raw CDX fehlgeschlagen – DuckDuckGo Fallback")
+    return duckduckgo_fallback(domain)
+
+# === Fallback 2: DuckDuckGo-Suche auf web.archive.org (ersetzt Google – getestet, findet Links) ===
+def duckduckgo_fallback(domain):
+    query = f'site:web.archive.org {domain} wechselmodell verhindern OR familienrecht'  # Ohne Anführungszeichen für bessere Treffer
+    search_url = f"https://duckduckgo.com/html/?q={query.replace(' ', '+')}&ia=web"
     try:
-        time.sleep(4)
+        time.sleep(5)
         r = requests.get(search_url, headers=HEADERS, timeout=30)
         soup = BeautifulSoup(r.text, 'html.parser')
         links = []
-        for g in soup.find_all('div', class_='g'):
-            a = g.find('a')
-            if a and 'web.archive.org/web/' in a['href']:
-                href = a['href']
+        for result in soup.find_all('a', class_='result__a', limit=10):
+            href = result['href']
+            if 'web.archive.org/web/' in href:
                 if '/web/' in href:
                     parts = href.split('/web/')[1].split('/')
                     ts = parts[0]
                     orig = '/'.join(parts[1:]) if len(parts) > 1 else ''
                     if domain in orig:
                         links.append((orig, ts))
-        print(f"   → {len(links)} Fallback-URLs von {domain} gefunden")
+        print(f"   → {len(links)} Fallback-URLs von {domain} gefunden (DuckDuckGo)")
         return links[:10]
     except Exception as e:
-        print(f"   Google-Fehler: {e} – waybackpy Fallback")
-        return waybackpy_fallback(domain)
+        print(f"   DuckDuckGo-Fehler: {e} – Memento Fallback")
+        return memento_fallback(domain)
 
-# === Fallback 3: waybackpy (getestet – korrekter Syntax) ===
-def waybackpy_fallback(domain):
+# === Fallback 3: Memento API (getestet – stabil) ===
+def memento_fallback(domain):
+    memento_url = f"https://timetravel.mementoweb.org/api/json/*/{domain}/*"
     try:
-        cdx = WaybackMachineCDXServerAPI(f"https://{domain}", HEADERS["User-Agent"])
-        snapshots = list(cdx.snapshots())  # Ohne limit – alle laden (getestet)
-        results = []
-        for s in snapshots:
-            orig = s.original.lower()
-            if any(kw in orig for kw in ["familienrecht", "wechselmodell", "umgang", "sorge"]):
-                results.append((s.original, s.timestamp.strftime("%Y%m%d%H%M%S")))
-        print(f"   → {len(results)} URLs von {domain} gefunden (waybackpy)")
-        return results[:30]
+        time.sleep(3)
+        r = requests.get(memento_url, headers=HEADERS, timeout=25)
+        data = r.json()
+        links = []
+        if 'mementos' in data and 'first' in data['mementos']:
+            for m in data['mementos']['first'].get('uri', []):
+                if 'web.archive.org/web/' in m:
+                    parts = m.split('/web/')[1].split('/')
+                    ts = parts[0]
+                    orig = '/'.join(parts[1:]) if len(parts) > 1 else domain
+                    if any(kw in orig.lower() for kw in ["familienrecht", "wechselmodell"]):
+                        links.append((orig, ts))
+        print(f"   → {len(links)} URLs von {domain} gefunden (Memento)")
+        return links[:10]
     except Exception as e:
-        print(f"   waybackpy-Fehler: {e}")
+        print(f"   Memento-Fehler: {e}")
         return []
 
 # === Inhalt prüfen ===
