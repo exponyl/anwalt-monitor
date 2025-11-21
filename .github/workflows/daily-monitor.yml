@@ -9,11 +9,11 @@ jobs:
   run:
     runs-on: ubuntu-latest
     permissions:
-      contents: write          # ← Wichtig: Schreibrechte für Push
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GH_PAT }}   # ← Wir nutzen dein PAT
+          token: ${{ secrets.GH_PAT }}
 
       - uses: actions/setup-python@v5
         with:
@@ -23,16 +23,15 @@ jobs:
         run: pip install -r monitor/requirements.txt
 
       - name: Run Monitor
-        env:
-          TARGETS_ENCRYPTED: ${{ secrets.TARGETS_ENCRYPTED }}
+        id: run-monitor
         run: python monitor/main.py
+        continue-on-error: false  # Stoppt bei Errors
 
-      - name: Commit & Push (falls geändert)
+      - name: Commit & Push
+        if: steps.run-monitor.outcome == 'success'
         run: |
           git config user.name "Monitor Bot"
           git config user.email "bot@anwalt-monitor"
           git add data/findings.json docs/index.html || true
-          git diff --quiet && git diff --staged --quiet || (
-            git commit -m "Auto-Update $(date +'%Y-%m-%d %H:%M')"
-            git push
-          )
+          git diff --quiet || git commit -m "Update Findings $(date +'%Y-%m-%d')"
+          git push
