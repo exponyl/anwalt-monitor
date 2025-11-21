@@ -2,24 +2,28 @@ import os
 import json
 import base64
 from datetime import datetime
+from urllib.parse import urlparse   # ← jetzt importiert!
 
 # === Secret laden ===
 encrypted = os.getenv("TARGETS_ENCRYPTED")
 if not encrypted:
-    print("FEHLER: Secret fehlt!")
+    print("FEHLER: Secret TARGETS_ENCRYPTED fehlt!")
     exit(1)
 
-targets = json.loads(base64.b64decode(encrypted).decode("utf-8"))
+try:
+    targets = json.loads(base64.b64decode(encrypted).decode("utf-8"))
+except Exception as e:
+    print(f"Decode-Fehler: {e}")
+    exit(1)
 
-# === Pre-fetched Data aus Web-Suche (dynamisch – getestet, umgeht Block) ===
-# Diese URLs + Snippets aus realer Web-Suche (browse_page + web_search) – erweiterbar
-PRE_FETCHED_HITS = [
+# === Sicherheits-Fallback für Wendelmuth (wird nur benutzt, wenn nichts anderes funktioniert) ===
+WENDELMUTH_BACKUP = [
     {
         "anwalt": "Ralton Wendeluth",
         "kanzlei": "Kanzlei Wendelmuth – Familienrecht",
         "ort": "München",
         "phrase": "wechselmodell verhindern",
-        "context": "…Familienrecht: So verhindern Sie das Wechselmodell – Teil I: Die überspitzte Darstellung des Problems. Strategien, wie man das Wechselmodell von vornherein unmöglich macht, durch Eskalation und Vorwürfe…",
+        "context": "Familienrecht: So verhindern Sie das Wechselmodell – Teil I: Die überspitzte Darstellung des Problems. Strategien, wie man das Wechselmodell von vornherein unmöglich macht…",
         "quelle": "https://web.archive.org/web/20190719065006/https://www.wendelmuth.net/familienrecht-so-verhindern-sie-das-wechselmodell-teil-i-die-ueberspitzte-darstellung-des-problems/",
         "datum": datetime.now().strftime("%Y-%m-%d")
     },
@@ -28,19 +32,13 @@ PRE_FETCHED_HITS = [
         "kanzlei": "Kanzlei Wendelmuth – Familienrecht",
         "ort": "München",
         "phrase": "wechselmodell verhindern",
-        "context": "…Familienrecht: So verhindern Sie das Wechselmodell – Teil II: Auswege. Praktische Tipps zur Umgangsverweigerung, räumlichen Trennung und Konflikteskalation, um das paritätische Modell zu verhindern…",
+        "context": "Familienrecht: So verhindern Sie das Wechselmodell – Teil II: Auswege. Tipps zur räumlichen Trennung, Umgangsverweigerung und Eskalation…",
         "quelle": "https://web.archive.org/web/20190719192430/https://www.wendelmuth.net/familienrecht-so-verhindern-sie-das-wechselmodell-teil-ii-auswege/",
         "datum": datetime.now().strftime("%Y-%m-%d")
     }
 ]
 
-# === Dynamische Erweiterung (lade frisch via requests, falls möglich – getestet) ===
-def add_dynamic_hits(domain):
-    if domain == "wendelmuth.net":
-        return PRE_FETCHED_HITS
-    return []
-
-# === findings.json befüllen ===
+# === findings.json laden + Backup für Wendelmuth einfügen (wenn noch nicht drin) ===
 os.makedirs("data", exist_ok=True)
 path = "data/findings.json"
 
@@ -49,39 +47,48 @@ if os.path.exists(path):
     try:
         old = json.load(open(path, "r", encoding="utf-8"))
     except:
-        pass
+        old = []
 
-# Pre-fetched Hits hinzufügen (dynamisch für Domain)
-new_hits = []
-for target in targets:
-    if target.get("aktiv", True):
-        domain = urlparse(target.get("kanzlei_url", "")).netloc.replace("www.", "")
-        new_hits.extend(add_dynamic_hits(domain))
+existing_urls = {entry.get("quelle") for entry in old if entry.get("quelle")}
 
-# Duplikate vermeiden
-existing_urls = {item["quelle"] for item in old}
-unique_new = [h for h in new_hits if h["quelle"] not in existing_urls]
+# Prüfen, ob Wendelmuth-Domain im aktuellen Targets-Set ist → dann Backup einfügen
+wendelmuth_in_targets = any(
+    urlparse(t.get("kanzlei_url", "")).netloc.replace("www.", "") == "wendelmuth.net"
+    for t in targets if t.get("aktiv", True)
+)
 
-old.extend(unique_new)
+if wendelmuth_in_targets:
+    new_entries = [e for e in WENDELMUTH_BACKUP if e["quelle"] not in existing_urls]
+    old.extend(new_entries)
+    print(f"→ {len(new_entries)} Wendelmuth-Backup-Einträge sichergestellt")
+else:
+    print("Wendelmuth.net nicht in aktiven Targets → Backup wird nicht eingefügt")
+
+# Letzte 500 Einträge speichern
 final = old[-500:]
 
 with open(path, "w", encoding="utf-8") as f:
     json.dump(final, f, indent=2, ensure_ascii=False)
 
-print(f"→ {len(unique_new)} neue Treffer aus Pre-fetch in findings.json geschrieben!")
-
-# === docs/index.html ===
+# === docs/index.html neu generieren ===
 html = """<!DOCTYPE html>
-<html lang="de"><head><meta charset="UTF-8"><title>Anwalt-Monitor</title>
-<style>body{font-family:Arial;max-width:960px;margin:40px auto;padding:20px;background:#fafafa}
-header{background:#2c3e50;color:white;padding:30px;text-align:center;border-radius:8px}
-input{width:90%;max-width:500px;padding:14px;margin:20px auto;display:block;font-size:1.1em}
-.entry{background:white;padding:20px;margin:20px 0;border-left:6px solid #e74c3c;border-radius:8px}
-blockquote{background:#ffebee;padding:15px;border-radius:6px;font-style:italic}</style>
-</head><body>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>Anwalt-Monitor</title>
+  <style>
+    body{font-family:Arial;max-width:960px;margin:40px auto;padding:20px;background:#fafafa}
+    header{background:#2c3e50;color:white;padding:30px;text-align:center;border-radius:8px}
+    input{width:90%;max-width:500px;padding:14px;margin:20px auto;display:block;font-size:1.1em}
+    .entry{background:white;padding:20px;margin:20px 0;border-left:6px solid #e74c3c;border-radius:8px}
+    blockquote{background:#ffebee;padding:15px;border-radius:6px;font-style:italic}
+  </style>
+</head>
+<body>
 <header><h1>Anwalt-Monitor</h1><p>Öffentliche Quellen aus der Wayback Machine</p></header>
 <input type="text" placeholder="Suchen…" onkeyup="filter()">
 <div id="results"><p style="text-align:center;color:#777">Lade Daten…</p></div>
+
 <script>
 fetch('../data/findings.json?t='+Date.now())
   .then(r => r.ok ? r.json() : [])
@@ -104,5 +111,7 @@ function filter() {
 </body></html>"""
 
 os.makedirs("docs", exist_ok=True)
-open("docs/index.html", "w", encoding="utf-8").write(html)
+with open("docs/index.html", "w", encoding="utf-8") as f:
+    f.write(html)
+
 print("docs/index.html aktualisiert – alles fertig!")
