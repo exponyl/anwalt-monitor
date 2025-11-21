@@ -1,14 +1,21 @@
 <!DOCTYPE html>
-<html lang="de"><head><meta charset="UTF-8"><title>Anwalt-Monitor</title>
-<style>body{font-family:Arial;max-width:960px;margin:40px auto;padding:20px;background:#fafafa}
-header{background:#2c3e50;color:white;padding:30px;text-align:center;border-radius:8px}
-input{width:90%;max-width:500px;padding:14px;margin:20px auto;display:block;font-size:1.1em}
-.entry{background:white;padding:20px;margin:20px 0;border-left:6px solid #e74c3c;border-radius:8px}
-blockquote{background:#ffebee;padding:15px;border-radius:6px;font-style:italic}</style>
-</head><body>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>Anwalt-Monitor</title>
+  <style>
+    body{font-family:Arial;max-width:960px;margin:40px auto;padding:20px;background:#fafafa}
+    header{background:#2c3e50;color:white;padding:30px;text-align:center;border-radius:8px}
+    input{width:90%;max-width:500px;padding:14px;margin:20px auto;display:block;font-size:1.1em}
+    .entry{background:white;padding:20px;margin:20px 0;border-left:6px solid #e74c3c;border-radius:8px}
+    blockquote{background:#ffebee;padding:15px;border-radius:6px;font-style:italic}
+  </style>
+</head>
+<body>
 <header><h1>Anwalt-Monitor</h1><p>Öffentliche Quellen aus der Wayback Machine</p></header>
 <input type="text" placeholder="Suchen…" onkeyup="filter()">
 <div id="results"><p style="text-align:center;color:#777">Lade Daten…</p></div>
+
 <script>
 fetch('../data/findings.json?t='+Date.now())
   .then(r => r.ok ? r.json() : [])
