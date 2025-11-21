@@ -2,13 +2,14 @@ import os
 import json
 import base64
 import requests
+import time
 from datetime import datetime
 from urllib.parse import urlparse
 
 # === Secrets ===
 encrypted = os.getenv("TARGETS_ENCRYPTED")
 if not encrypted:
-    print("Secret fehlt!")
+    print("FEHLER: Secret TARGETS_ENCRYPTED fehlt!")
     exit(1)
 
 try:
@@ -22,31 +23,49 @@ BAD_PHRASES = [
     "umgang verweigern", "kindeswohlgefährdung vortäuschen", "falsche gewaltvorwürfe"
 ]
 
-# === Robuster CDX-Proxy (funktioniert immer, auch bei GitHub Actions) ===
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (compatible; AnwaltMonitorBot/1.0; +https://github.com/exponyl/anwalt-monitor)"
+}
+
+# === Offizieller, stabiler CDX-Endpunkt + Rate-Limiting-Schutz ===
 def get_relevant_wayback_urls(domain):
-    # Öffentlicher Proxy, der Wayback nicht blockiert
-    proxy_url = f"https://wayback-api.archiveteam.org/cdx?url=*.{domain}/*&fl=original,timestamp&filter=statuscode:200&limit=500&output=json"
+    cdx_url = "https://web.archive.org/cdx/search/cdx"
+    params = {
+        "url": f"*.{domain}/*",
+        "fl": "original,timestamp",
+        "filter": "statuscode:200",
+        "collapse": "digest",
+        "limit": "500",
+        "output": "json"
+    }
     try:
-        r = requests.get(proxy_url, timeout=30)
+        time.sleep(1.5)  # Höfliche Pause gegen Block
+        r = requests.get(cdx_url, params=params, headers=HEADERS, timeout=30)
         if r.status_code != 200:
+            print(f"CDX HTTP {r.status_code} für {domain}")
             return []
         data = r.json()
+        if len(data) <= 1:
+            return []
         results = []
-        for item in data:
-            url = item[0]
-            ts = item[1]
-            if any(kw in url.lower() for kw in ["familienrecht", "wechselmodell", "umgang", "sorge", "scheidung"]):
-                results.append((url, ts))
-        return results[:50]
+        for item in data[1:]:
+            url = item[0].lower()
+            if any(kw in url for kw in ["familienrecht", "wechselmodell", "umgang", "sorge", "scheidung"]):
+                results.append((item[0], item[1]))
+        print(f"   → {len(results)} relevante URLs von {domain} gefunden")
+        return results[:40]
     except Exception as e:
-        print(f"Proxy-Fehler (harmlos): {e}")
+        print(f"   CDX-Fehler für {domain}: {e}")
         return []
 
 # === Inhalt prüfen ===
 def check_page(orig_url, timestamp):
     archive_url = f"https://web.archive.org/web/{timestamp}/{orig_url}"
     try:
-        r = requests.get(archive_url, timeout=20, headers={'User-Agent': 'Mozilla/5.0'})
+        time.sleep(1)  # Höflichkeit
+        r = requests.get(archive_url, headers=HEADERS, timeout=20)
+        if "wechselmodell" not in r.text.lower():
+            return None, None, None
         text = r.text.lower()
         for phrase in BAD_PHRASES:
             if phrase in text:
@@ -72,12 +91,11 @@ for target in targets:
     print(f"Prüfe: {name} → {domain}")
 
     archived = get_relevant_wayback_urls(domain)
-    print(f"   → {len(archived)} archivierte Seiten gefunden")
 
     for orig_url, ts in archived:
         phrase, context, archive_url = check_page(orig_url, ts)
         if phrase:
-            print(f"   → Treffer: {phrase}")
+            print(f"   TREFFER: {phrase} in {orig_url}")
             all_findings.append({
                 "anwalt": name,
                 "kanzlei": target.get("kanzlei_name", domain),
@@ -105,24 +123,16 @@ print(f"→ {len(new)} neue Treffer in findings.json geschrieben!")
 
 # === docs/index.html ===
 html = """<!DOCTYPE html>
-<html lang="de">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Anwalt-Monitor</title>
-  <style>
-    body{font-family:Arial;max-width:960px;margin:40px auto;padding:20px;background:#fafafa}
-    header{background:#2c3e50;color:white;padding:30px;text-align:center;border-radius:8px}
-    input{width:90%;max-width:500px;padding:14px;margin:20px auto;display:block;font-size:1.1em}
-    .entry{background:white;padding:20px;margin:20px 0;border-left:6px solid #e74c3c;border-radius:8px}
-    blockquote{background:#ffebee;padding:15px;border-radius:6px;font-style:italic}
-  </style>
-</head>
-<body>
+<html lang="de"><head><meta charset="UTF-8"><title>Anwalt-Monitor</title>
+<style>body{font-family:Arial;max-width:960px;margin:40px auto;padding:20px;background:#fafafa}
+header{background:#2c3e50;color:white;padding:30px;text-align:center;border-radius:8px}
+input{width:90%;max-width:500px;padding:14px;margin:20px auto;display:block;font-size:1.1em}
+.entry{background:white;padding:20px;margin:20px 0;border-left:6px solid #e74c3c;border-radius:8px}
+blockquote{background:#ffebee;padding:15px;border-radius:6px;font-style:italic}</style>
+</head><body>
 <header><h1>Anwalt-Monitor</h1><p>Öffentliche Quellen aus der Wayback Machine</p></header>
 <input type="text" placeholder="Suchen…" onkeyup="filter()">
 <div id="results"><p style="text-align:center;color:#777">Lade Daten…</p></div>
-
 <script>
 fetch('../data/findings.json?t='+Date.now())
   .then(r => r.ok ? r.json() : [])
@@ -142,8 +152,7 @@ function filter() {
   });
 }
 </script>
-</body>
-</html>"""
+</body></html>"""
 
 os.makedirs("docs", exist_ok=True)
 with open("docs/index.html", "w", encoding="utf-8") as f:
