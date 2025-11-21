@@ -23,58 +23,44 @@
   <h1>Anwalt-Monitor</h1>
   <p>Dokumentation öffentlich zugänglicher Quellen im Familienrecht</p>
 </header>
-
 <div class="search">
-  <input type="text" id="search" placeholder="Nach Anwalt, Ort oder Stichwort suchen…" onkeyup="filter()">
+  <input type="text" id="search" placeholder="Nach Anwalt oder Stichwort suchen…" onkeyup="filter()">
 </div>
-
 <div class="disclaimer">
-  <strong>Wichtiger Hinweis:</strong> Diese Seite zeigt ausschließlich öffentlich zugängliche Textstellen aus Webseiten und Urteilen. Es erfolgt <u>keine rechtliche Bewertung</u>.
+  <strong>Wichtiger Hinweis:</strong> Nur öffentlich archivierte Inhalte aus der Wayback Machine. Es erfolgt <u>keine rechtliche Bewertung</u>.
 </div>
-
 <div id="results">
-  <p style="text-align:center;color:#777;">
-    Lade aktuelle Daten…<br><small>Die Seite wird täglich automatisch aktualisiert.</small>
-  </p>
+  <p style="text-align:center;color:#777;">Lade Daten…</p>
 </div>
-
-<footer>
-  Ein Projekt für Transparenz im Familienrecht • Stand: <span id="date"></span>
-</footer>
+<footer>Stand: <span id="date"></span></footer>
 
 <script>
-fetch('../data/findings.json?t=' + Date.now())
+fetch('../data/findings.json?t='+Date.now())
   .then(r => r.ok ? r.json() : [])
   .then(data => {
-    const container = document.getElementById('results');
-    container.innerHTML = '';
-    if (!data || data.length === 0) {
-      container.innerHTML = '<p style="text-align:center;color:#777;">Noch keine dokumentierten Funde.</p>';
+    const c = document.getElementById('results');
+    c.innerHTML = '';
+    if (data.length === 0) {
+      c.innerHTML = '<p style="text-align:center;color:#777">Noch keine Treffer.</p>';
       return;
     }
-    data.slice().reverse().forEach(item => {
-      const div = document.createElement('div');
-      div.className = 'entry';
-      div.innerHTML = `
-        <div class="name">${item.anwalt || 'Unbekannt'}</div>
-        <div class="meta">
-          ${item.kanzlei ? item.kanzlei + ' • ' : ''}
-          ${item.ort ? item.ort + ' • ' : ''}
-          <a href="${item.quelle}" target="_blank">${item.quelle.replace(/^https?:\/\//,'').split('/')[0]}</a> • ${item.datum}
-        </div>
-        <blockquote>…${item.context}…</blockquote>
+    data.slice().reverse().forEach(i => {
+      const d = document.createElement('div');
+      d.className = 'entry';
+      d.innerHTML = `
+        <div class="name">${i.anwalt}</div>
+        <div class="meta">${i.kanzlei} • ${i.ort} • <a href="${i.quelle}" target="_blank">Wayback Machine</a> • ${i.datum}</div>
+        <blockquote>…${i.context}</blockquote>
       `;
-      container.appendChild(div);
+      c.appendChild(d);
     });
   });
-
 function filter() {
   const term = document.getElementById('search').value.toLowerCase();
   document.querySelectorAll('.entry').forEach(e => {
     e.style.display = e.textContent.toLowerCase().includes(term) ? 'block' : 'none';
   });
 }
-
 document.getElementById('date').textContent = new Date().toLocaleDateString('de-DE');
 </script>
 </body>
