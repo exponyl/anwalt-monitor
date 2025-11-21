@@ -1,31 +1,43 @@
 <!DOCTYPE html>
-<html lang="de"><head><meta charset="UTF-8"><title>Anwalt-Monitor</title>
-<style>body{font-family:Arial;max-width:960px;margin:40px auto;padding:20px;background:#fafafa}
-header{background:#2c3e50;color:white;padding:30px;text-align:center;border-radius:8px}
-input{width:90%;max-width:500px;padding:14px;margin:20px auto;display:block;font-size:1.1em}
-.entry{background:white;padding:20px;margin:20px 0;border-left:6px solid #e74c3c;border-radius:8px}
-blockquote{background:#ffebee;padding:15px;border-radius:6px;font-style:italic}</style>
-</head><body>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>Anwalt-Monitor</title>
+  <style>
+    body{font-family:Arial;max-width:960px;margin:40px auto;padding:20px;background:#fafafa}
+    header{background:#2c3e50;color:white;padding:30px;text-align:center;border-radius:8px}
+    input{width:90%;max-width:500px;padding:14px;margin:20px auto;display:block;font-size:1.1em}
+    .entry{background:white;padding:20px;margin:20px 0;border-left:6px solid #e74c3c;border-radius:8px;box-shadow:0 2px 5px rgba(0,0,0,0.1)}
+    blockquote{background:#ffebee;padding:15px;border-radius:6px;font-style:italic;margin:10px 0}
+  </style>
+</head>
+<body>
 <header><h1>Anwalt-Monitor</h1><p>Öffentliche Quellen aus der Wayback Machine</p></header>
 <input type="text" placeholder="Suchen…" onkeyup="filter()">
 <div id="results"><p style="text-align:center;color:#777">Lade Daten…</p></div>
+
 <script>
-fetch('../data/findings.json?t='+Date.now())
+fetch('data/findings.json?t='+Date.now())
   .then(r => r.ok ? r.json() : [])
   .then(d => {
     const c = document.getElementById('results'); c.innerHTML = '';
-    if (d.length === 0) { c.innerHTML = '<p>Noch keine Treffer.</p>'; return; }
+    if (!d.length) { c.innerHTML = '<p>Noch keine Treffer.</p>'; return; }
     d.slice().reverse().forEach(i => {
-      c.innerHTML += `<div class="entry"><b>${i.anwalt}</b> • ${i.kanzlei} • ${i.ort}<br>
+      c.innerHTML += `<div class="entry">
+        <strong>${i.anwalt}</strong> • ${i.kanzlei} • ${i.ort}<br>
         <a href="${i.quelle}" target="_blank">Wayback Machine</a> • ${i.datum}
-        <blockquote>…${i.context}</blockquote></div>`;
+        <blockquote>…${i.context}</blockquote>
+      </div>`;
     });
-  });
+  })
+  .catch(() => document.getElementById('results').innerHTML = '<p>Fehler beim Laden.</p>');
+
 function filter() {
-  let t = document.querySelector('input').value.toLowerCase();
+  let term = document.querySelector('input').value.toLowerCase();
   document.querySelectorAll('.entry').forEach(e => {
-    e.style.display = e.textContent.toLowerCase().includes(t) ? 'block' : 'none';
+    e.style.display = e.textContent.toLowerCase().includes(term) ? 'block' : 'none';
   });
 }
 </script>
-</body></html>
+</body>
+</html>
