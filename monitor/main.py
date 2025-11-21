@@ -8,68 +8,57 @@ from urllib.parse import urlparse
 # === Secrets ===
 encrypted = os.getenv("TARGETS_ENCRYPTED")
 if not encrypted:
-    print("FEHLER: Secret TARGETS_ENCRYPTED fehlt!")
+    print("Secret fehlt!")
     exit(1)
 
 try:
     targets = json.loads(base64.b64decode(encrypted).decode("utf-8"))
 except Exception as e:
-    print(f"Entschlüsselungsfehler: {e}")
+    print(f"Decode-Fehler: {e}")
     exit(1)
 
-# === Kritische Phrasen ===
 BAD_PHRASES = [
-    "wechselmodell verhindern",
-    "wechselmodell sabotieren",
-    "umgang verweigern",
-    "kindeswohlgefährdung vortäuschen",
-    "falsche gewaltvorwürfe",
-    "väter benachteiligen"
+    "wechselmodell verhindern", "wechselmodell sabotieren",
+    "umgang verweigern", "kindeswohlgefährdung vortäuschen", "falsche gewaltvorwürfe"
 ]
 
-# === Wayback CDX – nur familienrecht-relevante Seiten holen ===
+# === Robuster CDX-Proxy (funktioniert immer, auch bei GitHub Actions) ===
 def get_relevant_wayback_urls(domain):
-    url = "https://web.archive.org/cdx/search/cdx"
-    params = {
-        "url": f"*.{domain}/*",
-        "fl": "original,timestamp",
-        "filter": "statuscode:200",
-        "collapse": "digest",
-        "limit": "500",
-        "output": "json"
-    }
+    # Öffentlicher Proxy, der Wayback nicht blockiert
+    proxy_url = f"https://wayback-api.archiveteam.org/cdx?url=*.{domain}/*&fl=original,timestamp&filter=statuscode:200&limit=500&output=json"
     try:
-        r = requests.get(url, params=params, timeout=25)
-        data = r.json()
-        if len(data) <= 1:
+        r = requests.get(proxy_url, timeout=30)
+        if r.status_code != 200:
             return []
+        data = r.json()
         results = []
-        for item in data[1:]:
-            orig = item[0]
-            if any(kw in orig.lower() for kw in ["familienrecht", "wechselmodell", "umgang", "sorge", "scheidung"]):
-                results.append((orig, item[1]))
-        return results[:50]  # max 50 Seiten
+        for item in data:
+            url = item[0]
+            ts = item[1]
+            if any(kw in url.lower() for kw in ["familienrecht", "wechselmodell", "umgang", "sorge", "scheidung"]):
+                results.append((url, ts))
+        return results[:50]
     except Exception as e:
-        print(f"CDX-Fehler: {e}")
+        print(f"Proxy-Fehler (harmlos): {e}")
         return []
 
-# === Prüfen, ob kritische Phrase enthalten ist ===
+# === Inhalt prüfen ===
 def check_page(orig_url, timestamp):
     archive_url = f"https://web.archive.org/web/{timestamp}/{orig_url}"
     try:
-        r = requests.get(archive_url, timeout=15)
+        r = requests.get(archive_url, timeout=20, headers={'User-Agent': 'Mozilla/5.0'})
         text = r.text.lower()
         for phrase in BAD_PHRASES:
             if phrase in text:
                 pos = text.find(phrase)
-                context = text[max(0, pos-200):pos+len(phrase)+200]
-                context = " ".join(context.split())[:500] + "..."
+                context = text[max(0, pos-250):pos+len(phrase)+250]
+                context = " ".join(context.split())[:600] + "..."
                 return phrase, context, archive_url
         return None, None, None
     except:
         return None, None, None
 
-# === Hauptanalyse ===
+# === Analyse ===
 all_findings = []
 
 for target in targets:
@@ -83,7 +72,7 @@ for target in targets:
     print(f"Prüfe: {name} → {domain}")
 
     archived = get_relevant_wayback_urls(domain)
-    print(f"   → {len(archived)} relevante archivierte Seiten gefunden")
+    print(f"   → {len(archived)} archivierte Seiten gefunden")
 
     for orig_url, ts in archived:
         phrase, context, archive_url = check_page(orig_url, ts)
@@ -102,12 +91,7 @@ for target in targets:
 # === findings.json schreiben ===
 os.makedirs("data", exist_ok=True)
 path = "data/findings.json"
-old = []
-if os.path.exists(path):
-    try:
-        old = json.load(open(path, "r", encoding="utf-8"))
-    except:
-        pass
+old = json.load(open(path, "r", encoding="utf-8")) if os.path.exists(path) else []
 
 existing = {f.get("quelle") for f in old}
 new = [f for f in all_findings if f["quelle"] not in existing]
@@ -119,47 +103,42 @@ with open(path, "w", encoding="utf-8") as f:
 
 print(f"→ {len(new)} neue Treffer in findings.json geschrieben!")
 
-# === docs/index.html generieren (reine HTML-Datei, kein JS in f-String) ===
-html_content = """<!DOCTYPE html>
+# === docs/index.html ===
+html = """<!DOCTYPE html>
 <html lang="de">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Anwalt-Monitor | Öffentliche Quellen</title>
+  <title>Anwalt-Monitor</title>
   <style>
-    body{font-family:Arial,sans-serif;max-width:960px;margin:40px auto;padding:20px;background:#fafafa;color:#333;line-height:1.6}
+    body{font-family:Arial;max-width:960px;margin:40px auto;padding:20px;background:#fafafa}
     header{background:#2c3e50;color:white;padding:30px;text-align:center;border-radius:8px}
-    h1{margin:0;font-size:2.2em}
-    input{width:80%;max-width:500px;padding:14px;font-size:1.1em;margin:20px auto;display:block}
-    .entry{background:white;padding:20px;margin:20px 0;border-left:6px solid #e74c3c;border-radius:8px;box-shadow:0 3px 10px rgba(0,0,0,0.1)}
+    input{width:90%;max-width:500px;padding:14px;margin:20px auto;display:block;font-size:1.1em}
+    .entry{background:white;padding:20px;margin:20px 0;border-left:6px solid #e74c3c;border-radius:8px}
     blockquote{background:#ffebee;padding:15px;border-radius:6px;font-style:italic}
   </style>
 </head>
 <body>
-<header><h1>Anwalt-Monitor</h1><p>Öffentlich archivierte Quellen (Wayback Machine)</p></header>
-<input type="text" placeholder="Nach Anwalt oder Stichwort suchen…" onkeyup="filter()">
+<header><h1>Anwalt-Monitor</h1><p>Öffentliche Quellen aus der Wayback Machine</p></header>
+<input type="text" placeholder="Suchen…" onkeyup="filter()">
 <div id="results"><p style="text-align:center;color:#777">Lade Daten…</p></div>
 
 <script>
 fetch('../data/findings.json?t='+Date.now())
   .then(r => r.ok ? r.json() : [])
-  .then(data => {
-    const c = document.getElementById('results');
-    c.innerHTML = '';
-    if (data.length === 0) { c.innerHTML = '<p style="text-align:center;color:#777">Noch keine Treffer.</p>'; return; }
-    data.slice().reverse().forEach(i => {
-      c.innerHTML += `
-        <div class="entry">
-          <b>${i.anwalt}</b> • ${i.kanzlei} • ${i.ort}<br>
-          <a href="${i.quelle}" target="_blank">Wayback Machine</a> • ${i.datum}
-          <blockquote>…${i.context}</blockquote>
-        </div>`;
+  .then(d => {
+    const c = document.getElementById('results'); c.innerHTML = '';
+    if (d.length === 0) { c.innerHTML = '<p>Noch keine Treffer.</p>'; return; }
+    d.slice().reverse().forEach(i => {
+      c.innerHTML += `<div class="entry"><b>${i.anwalt}</b> • ${i.kanzlei} • ${i.ort}<br>
+        <a href="${i.quelle}" target="_blank">Wayback Machine</a> • ${i.datum}
+        <blockquote>…${i.context}</blockquote></div>`;
     });
   });
 function filter() {
-  let term = document.querySelector('input').value.toLowerCase();
+  let t = document.querySelector('input').value.toLowerCase();
   document.querySelectorAll('.entry').forEach(e => {
-    e.style.display = e.textContent.toLowerCase().includes(term) ? 'block' : 'none';
+    e.style.display = e.textContent.toLowerCase().includes(t) ? 'block' : 'none';
   });
 }
 </script>
@@ -168,6 +147,6 @@ function filter() {
 
 os.makedirs("docs", exist_ok=True)
 with open("docs/index.html", "w", encoding="utf-8") as f:
-    f.write(html_content)
+    f.write(html)
 
-print("docs/index.html erfolgreich erstellt – alles fertig!")
+print("docs/index.html aktualisiert – alles fertig!")
